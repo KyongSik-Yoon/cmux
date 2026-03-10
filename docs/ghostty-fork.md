@@ -31,6 +31,15 @@ When we change the fork, update this document and the parent submodule SHA.
   - Restarts the CVDisplayLink when `setMacOSDisplayID` updates the current CGDisplay.
   - Prevents a rare state where vsync is "running" but no callbacks arrive, which can look like a frozen surface until focus/occlusion changes.
 
+### 3) Linux embedded resize stale-frame guard scoping
+
+- Commit: `10cb29c20` (embedded: scope stale-frame guard override to Linux)
+- Files:
+  - `src/renderer/generic.zig`
+- Summary:
+  - Limits the embedded resize stale-frame override to Linux `libghostty` builds.
+  - Preserves the existing synchronous resize guard for other embedded hosts such as GhosttyKit on Darwin.
+
 ## Merge conflict notes
 
 These files change frequently upstream; be careful when rebasing the fork:
@@ -41,5 +50,9 @@ These files change frequently upstream; be careful when rebasing the fork:
 
 - `src/terminal/osc.zig`
   - OSC dispatch logic moves often. Re-check the integration points for the OSC 99 parser.
+
+- `src/renderer/generic.zig`
+  - Upstream already carries resize-flash mitigation logic around the sync display path.
+  - Keep the Linux embedded override narrow so GhosttyKit/macOS retains the stale-frame replay behavior.
 
 If you resolve a conflict, update this doc with what changed.
