@@ -10,12 +10,16 @@ DISPLAY_NUM="${DISPLAY_NUM:-106}"
 DISPLAY=":$DISPLAY_NUM"
 WINDOW_SIZE="${WINDOW_SIZE:-1400x900}"
 SCREENSHOT_KIT_DIR="${SCREENSHOT_KIT_DIR:-$HOME/bin/screenshot-kit}"
-RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+RUNTIME_DIR="${CAPTURE_RUNTIME_DIR:-$REPO_ROOT/tmp/capture-runtime-$DISPLAY_NUM}"
 SOCKET_PATH="$RUNTIME_DIR/cmux.sock"
 APP_LOG="$REPO_ROOT/tmp/linux_port_capture.log"
 APP_PID=""
 REQUEST_ID=1
 RECORDING_PID=""
+SOCKET_OURS=0
+DEMO_ROOT_DIR="${DEMO_ROOT_DIR:-$REPO_ROOT}"
+DEMO_REVIEW_DIR="${DEMO_REVIEW_DIR:-$REPO_ROOT/linux}"
+DEMO_DOCS_DIR="${DEMO_DOCS_DIR:-$REPO_ROOT/docs}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -44,24 +48,34 @@ wait_for_socket() {
   exit 1
 }
 
-ensure_socket_available() {
-  if [ ! -S "$SOCKET_PATH" ]; then
-    return 0
-  fi
-
+socket_is_live() {
   local probe=""
+
   probe="$(
     printf '{"id":0,"method":"system.ping","params":{}}\n' |
       nc -w 1 -N -U "$SOCKET_PATH" 2>/dev/null || true
   )"
 
-  if echo "$probe" | jq -e '.ok == true' >/dev/null 2>&1; then
+  echo "$probe" | jq -e '.ok == true' >/dev/null 2>&1
+}
+
+ensure_socket_available() {
+  mkdir -p "$RUNTIME_DIR"
+  chmod 700 "$RUNTIME_DIR"
+
+  if [ ! -S "$SOCKET_PATH" ]; then
+    return 0
+  fi
+
+  if socket_is_live; then
     echo "Error: another cmux instance is already responding on $SOCKET_PATH" >&2
-    echo "Stop it first, then rerun this script." >&2
+    echo "Use a different CAPTURE_RUNTIME_DIR or stop the other instance first." >&2
     exit 1
   fi
 
-  rm -f "$SOCKET_PATH"
+  if [ -S "$SOCKET_PATH" ]; then
+    rm -f "$SOCKET_PATH"
+  fi
 }
 
 wait_for_window() {
@@ -132,7 +146,10 @@ stop_app() {
     wait "$APP_PID" 2>/dev/null || true
   fi
   APP_PID=""
-  rm -f "$SOCKET_PATH"
+  if [ "$SOCKET_OURS" -eq 1 ] && [ -S "$SOCKET_PATH" ]; then
+    rm -f "$SOCKET_PATH"
+  fi
+  SOCKET_OURS=0
   wait_for_no_window || true
 }
 
@@ -140,12 +157,14 @@ start_app() {
   ensure_socket_available
 
   LD_LIBRARY_PATH="$TARGET_DIR" \
+    XDG_RUNTIME_DIR="$RUNTIME_DIR" \
     GDK_BACKEND=x11 \
     DISPLAY="$DISPLAY" \
     "$TARGET_DIR/cmux-app" >"$APP_LOG" 2>&1 &
   APP_PID=$!
 
   wait_for_socket
+  SOCKET_OURS=1
   WINDOW_ID="$(wait_for_window)"
   DISPLAY="$DISPLAY" xdotool windowsize "$WINDOW_ID" "${WINDOW_SIZE%x*}" "${WINDOW_SIZE#*x}" >/dev/null 2>&1 || true
   sleep 1
@@ -189,7 +208,7 @@ main() {
   start_recording "$terminal_demo_video" 5
   sleep 0.5
   type_line "$WINDOW_ID" "clear"
-  type_line "$WINDOW_ID" "cd /home/sal9000/cmux/.worktrees/linux-port"
+  type_line "$WINDOW_ID" "cd $DEMO_ROOT_DIR"
   type_line "$WINDOW_ID" "printf 'ghostty linked demo\n'"
   type_line "$WINDOW_ID" "git status --short --branch | head -5"
   type_line "$WINDOW_ID" "pwd"
@@ -203,17 +222,17 @@ main() {
 
   workspace_one="$(
     socket_call "workspace.create" \
-      "$(jq -nc --arg title "Claude Code" --arg directory "/home/sal9000/cmux" '{title:$title,directory:$directory}')" |
+      "$(jq -nc --arg title "Claude Code" --arg directory "$DEMO_ROOT_DIR" '{title:$title,directory:$directory}')" |
       jq -r '.result.workspace_id'
   )"
   workspace_two="$(
     socket_call "workspace.new" \
-      "$(jq -nc --arg title "Codex Review" --arg directory "/home/sal9000/cmux/.worktrees/linux-port" '{title:$title,directory:$directory}')" |
+      "$(jq -nc --arg title "Codex Review" --arg directory "$DEMO_REVIEW_DIR" '{title:$title,directory:$directory}')" |
       jq -r '.result.workspace_id'
   )"
   workspace_three="$(
     socket_call "workspace.new" \
-      "$(jq -nc --arg title "Release Notes" --arg directory "/home/sal9000/cmux/docs" '{title:$title,directory:$directory}')" |
+      "$(jq -nc --arg title "Release Notes" --arg directory "$DEMO_DOCS_DIR" '{title:$title,directory:$directory}')" |
       jq -r '.result.workspace_id'
   )"
 
