@@ -178,20 +178,19 @@ type_line() {
   DISPLAY="$DISPLAY" xdotool key --window "$window_id" Return
 }
 
-display_shell_path() {
+display_quoted_path() {
   local path="$1"
+  local display_path="$path"
 
-  if [ "$path" = "$HOME" ]; then
-    printf '$HOME'
-    return 0
+  if [ "$display_path" = "$HOME" ]; then
+    display_path='$HOME'
+  elif [[ "$display_path" == "$HOME/"* ]]; then
+    display_path="\$HOME/${display_path#$HOME/}"
   fi
 
-  if [[ "$path" == "$HOME/"* ]]; then
-    printf '$HOME/%q' "${path#$HOME/}"
-    return 0
-  fi
-
-  printf '%q' "$path"
+  display_path="${display_path//\\/\\\\}"
+  display_path="${display_path//\"/\\\"}"
+  printf '"%s"' "$display_path"
 }
 
 main() {
@@ -222,7 +221,7 @@ main() {
   local workspace_video="$OUT_DIR/linux_port_ghostty_workspace_demo.mp4"
   local display_demo_root
 
-  display_demo_root="$(display_shell_path "$DEMO_ROOT_DIR")"
+  display_demo_root="$(display_quoted_path "$DEMO_ROOT_DIR")"
 
   start_recording "$terminal_demo_video" 5
   sleep 0.5
