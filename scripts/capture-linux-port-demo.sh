@@ -178,6 +178,22 @@ type_line() {
   DISPLAY="$DISPLAY" xdotool key --window "$window_id" Return
 }
 
+display_shell_path() {
+  local path="$1"
+
+  if [ "$path" = "$HOME" ]; then
+    printf '$HOME'
+    return 0
+  fi
+
+  if [[ "$path" == "$HOME/"* ]]; then
+    printf '$HOME/%q' "${path#$HOME/}"
+    return 0
+  fi
+
+  printf '%q' "$path"
+}
+
 main() {
   trap cleanup EXIT
 
@@ -204,14 +220,17 @@ main() {
   local splits_png="$OUT_DIR/linux_port_ghostty_splits.png"
   local splits_annotated_png="$OUT_DIR/linux_port_ghostty_splits_annotated.png"
   local workspace_video="$OUT_DIR/linux_port_ghostty_workspace_demo.mp4"
+  local display_demo_root
+
+  display_demo_root="$(display_shell_path "$DEMO_ROOT_DIR")"
 
   start_recording "$terminal_demo_video" 5
   sleep 0.5
   type_line "$WINDOW_ID" "clear"
-  type_line "$WINDOW_ID" "cd $DEMO_ROOT_DIR"
+  type_line "$WINDOW_ID" "cd $display_demo_root"
   type_line "$WINDOW_ID" "printf 'ghostty linked demo\n'"
   type_line "$WINDOW_ID" "git status --short --branch | head -5"
-  type_line "$WINDOW_ID" "pwd"
+  type_line "$WINDOW_ID" "printf 'workspace: %s\n' cmux"
   wait "$RECORDING_PID"
   window_screenshot "$terminal_hero_png"
 
