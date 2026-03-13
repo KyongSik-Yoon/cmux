@@ -276,7 +276,7 @@ main() {
   socket_call "workspace.set_progress" '{"value":0.45,"label":"capture"}' >/dev/null
   socket_call "notification.create" '{"title":"Codex","body":"Need screenshot approval","send_desktop":false}' >/dev/null
 
-  socket_call "workspace.select" "$(jq -nc --arg workspace "$workspace_two" '{workspace:$workspace}')" >/dev/null
+  socket_call "workspace.select" "$(jq -nc --arg workspace "$workspace_three" '{workspace:$workspace}')" >/dev/null
   socket_call "workspace.report_git_branch" '{"branch":"docs/pr-assets","is_dirty":false}' >/dev/null
   socket_call "workspace.set_status" '{"key":"agent","value":"Drafting","icon":"note"}' >/dev/null
   socket_call "notification.create" '{"title":"Release","body":"Assets ready to attach","send_desktop":false}' >/dev/null
