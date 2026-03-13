@@ -180,17 +180,27 @@ type_line() {
 
 display_quoted_path() {
   local path="$1"
-  local display_path="$path"
+  local suffix
 
-  if [ "$display_path" = "$HOME" ]; then
-    display_path='$HOME'
-  elif [[ "$display_path" == "$HOME/"* ]]; then
-    display_path="\$HOME/${display_path#$HOME/}"
+  if [ "$path" = "$HOME" ]; then
+    printf '"$HOME"'
+    return
+  elif [[ "$path" == "$HOME/"* ]]; then
+    suffix="${path#"$HOME"/}"
+    # Escape shell-special characters in the suffix
+    suffix="${suffix//\\/\\\\}"
+    suffix="${suffix//\$/\\\$}"
+    suffix="${suffix//\`/\\\`}"
+    suffix="${suffix//\"/\\\"}"
+    printf '"$HOME/%s"' "$suffix"
+  else
+    local display_path="$path"
+    display_path="${display_path//\\/\\\\}"
+    display_path="${display_path//\$/\\\$}"
+    display_path="${display_path//\`/\\\`}"
+    display_path="${display_path//\"/\\\"}"
+    printf '"%s"' "$display_path"
   fi
-
-  display_path="${display_path//\\/\\\\}"
-  display_path="${display_path//\"/\\\"}"
-  printf '"%s"' "$display_path"
 }
 
 main() {
