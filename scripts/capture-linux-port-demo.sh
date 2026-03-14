@@ -63,8 +63,12 @@ ensure_socket_available() {
   mkdir -p "$RUNTIME_DIR"
   chmod 700 "$RUNTIME_DIR"
 
-  if [ ! -S "$SOCKET_PATH" ]; then
+  if [ ! -e "$SOCKET_PATH" ]; then
     return 0
+  fi
+  if [ ! -S "$SOCKET_PATH" ]; then
+    echo "Error: $SOCKET_PATH exists but is not a socket — refusing to overwrite" >&2
+    exit 1
   fi
 
   if socket_is_live; then
@@ -117,7 +121,7 @@ socket_call() {
   response="$(
     printf '{"id":%s,"method":"%s","params":%s}\n' \
       "$REQUEST_ID" "$method" "$params" |
-      nc -N -U "$SOCKET_PATH"
+      nc -w 5 -N -U "$SOCKET_PATH"
   )"
   REQUEST_ID=$((REQUEST_ID + 1))
 
