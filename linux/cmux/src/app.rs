@@ -57,6 +57,7 @@ impl AppState {
         let gl_surface = ghostty_gtk::surface::GhosttyGlSurface::new();
         gl_surface.set_hexpand(true);
         gl_surface.set_vexpand(true);
+        gl_surface.set_panel_id(panel_id);
 
         if let Some(app) = self.ghostty_app.borrow().as_ref() {
             gl_surface.initialize(app.raw(), working_directory, None);
@@ -134,6 +135,8 @@ impl AppState {
 pub enum UiEvent {
     Refresh,
     SendInput { panel_id: Uuid, text: String },
+    SurfacePwd { panel_id: Uuid, pwd: String },
+    SurfaceTitle { panel_id: Uuid, title: String },
 }
 
 /// Thread-safe state shared between GTK main thread and socket server.
@@ -200,6 +203,7 @@ pub fn run() -> i32 {
 
     app.connect_shutdown(|_app| {
         *GHOSTTY_APP_PTR.lock().unwrap() = SendAppPtr(std::ptr::null_mut());
+        *SHARED_STATE.lock().unwrap() = None;
         GHOSTTY_TICK_PENDING.store(false, Ordering::Release);
         socket::server::cleanup();
         tracing::info!("Application shutdown");
@@ -243,6 +247,7 @@ fn init_ghostty(state: &Rc<AppState>) {
         Ok(ghostty_app) => {
             tracing::info!("Ghostty app initialized successfully");
             *GHOSTTY_APP_PTR.lock().unwrap() = SendAppPtr(ghostty_app.raw());
+            *SHARED_STATE.lock().unwrap() = Some(state.shared.clone());
             *state.ghostty_app.borrow_mut() = Some(ghostty_app);
             *state._callbacks.borrow_mut() = Some(callbacks);
         }
@@ -297,7 +302,52 @@ impl ghostty_gtk::callbacks::GhosttyCallbackHandler for CmuxCallbackHandler {
                 }
                 true
             }
-            ghostty_action_tag_e::GHOSTTY_ACTION_SET_TITLE => true,
+            ghostty_action_tag_e::GHOSTTY_ACTION_SET_TITLE => {
+                if target.tag == ghostty_target_tag_e::GHOSTTY_TARGET_SURFACE {
+                    #[cfg(feature = "link-ghostty")]
+                    unsafe {
+                        let title_s = action.action.set_title;
+                        if !title_s.title.is_null() {
+                            let title = std::ffi::CStr::from_ptr(title_s.title)
+                                .to_string_lossy()
+                                .into_owned();
+                            let surface_ptr = target.target.surface;
+                            let userdata = ghostty_surface_userdata(surface_ptr);
+                            dispatch_surface_metadata(userdata, move |panel_id, shared| {
+                                let mut tm = lock_or_recover(&shared.tab_manager);
+                                if let Some(ws) = tm.find_workspace_with_panel_mut(panel_id) {
+                                    ws.process_title = title;
+                                }
+                                shared.notify_ui_refresh();
+                            });
+                        }
+                    }
+                }
+                true
+            }
+            ghostty_action_tag_e::GHOSTTY_ACTION_PWD => {
+                if target.tag == ghostty_target_tag_e::GHOSTTY_TARGET_SURFACE {
+                    #[cfg(feature = "link-ghostty")]
+                    unsafe {
+                        let pwd_s = action.action.pwd;
+                        if !pwd_s.pwd.is_null() {
+                            let pwd = std::ffi::CStr::from_ptr(pwd_s.pwd)
+                                .to_string_lossy()
+                                .into_owned();
+                            let surface_ptr = target.target.surface;
+                            let userdata = ghostty_surface_userdata(surface_ptr);
+                            dispatch_surface_metadata(userdata, move |panel_id, shared| {
+                                let mut tm = lock_or_recover(&shared.tab_manager);
+                                if let Some(ws) = tm.find_workspace_with_panel_mut(panel_id) {
+                                    ws.current_directory = pwd;
+                                }
+                                shared.notify_ui_refresh();
+                            });
+                        }
+                    }
+                }
+                true
+            }
             _ => {
                 tracing::trace!("Unhandled ghostty action: {:?}", action.tag as u32);
                 false
@@ -323,8 +373,28 @@ impl SendAppPtr {
     }
 }
 
+/// Dispatch a metadata update from a ghostty surface callback to the main thread.
+/// Resolves the surface's panel_id via its userdata, then calls `f` with the
+/// panel_id and shared state.
+fn dispatch_surface_metadata<F>(userdata: *mut std::os::raw::c_void, f: F)
+where
+    F: FnOnce(Uuid, &SharedState) + Send + 'static,
+{
+    let weak = unsafe { ghostty_gtk::callbacks::surface_from_callback_userdata(userdata) };
+    let Some(surface) = weak else { return };
+    let Some(panel_id) = surface.panel_id() else { return };
+
+    glib::MainContext::default().invoke(move || {
+        let guard = SHARED_STATE.lock().unwrap();
+        if let Some(ref shared) = *guard {
+            f(panel_id, shared);
+        }
+    });
+}
+
 static GHOSTTY_APP_PTR: Mutex<SendAppPtr> = Mutex::new(SendAppPtr(std::ptr::null_mut()));
 static GHOSTTY_TICK_PENDING: AtomicBool = AtomicBool::new(false);
+static SHARED_STATE: Mutex<Option<Arc<SharedState>>> = Mutex::new(None);
 
 #[cfg(test)]
 mod tests {

@@ -19,6 +19,7 @@ pub fn create_window(
     ui_events: UnboundedReceiver<UiEvent>,
 ) -> adw::ApplicationWindow {
     install_css();
+    ensure_icon_theme();
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -190,7 +191,9 @@ fn bind_shared_state_updates(
                 };
 
                 match event {
-                    UiEvent::Refresh => needs_refresh = true,
+                    UiEvent::Refresh
+                    | UiEvent::SurfacePwd { .. }
+                    | UiEvent::SurfaceTitle { .. } => needs_refresh = true,
                     UiEvent::SendInput { panel_id, text } => {
                         let sent = state.send_input_to_panel(panel_id, &text);
                         if !sent {
@@ -313,6 +316,23 @@ fn setup_shortcuts(
     window.add_controller(controller);
 }
 
+/// Ensure Adwaita symbolic icons are available regardless of the active icon theme.
+///
+/// Custom themes (e.g. Flat-Remix) may not include GNOME/Adwaita-specific
+/// symbolic icons like `tab-new-symbolic`. Adding "Adwaita" as a suffix
+/// theme tells GTK to fall back to it for any missing icons.
+/// Ensure Adwaita symbolic icons are available regardless of the active icon theme.
+///
+/// Custom themes (e.g. Flat-Remix) inherit from AdwaitaLegacy/hicolor but
+/// not from the modern Adwaita theme, so GNOME symbolic icons like
+/// `tab-new-symbolic` are missing. Override via GtkSettings since this is
+/// a libadwaita app that depends on Adwaita's icon set.
+fn ensure_icon_theme() {
+    if let Some(settings) = gtk4::Settings::default() {
+        settings.set_gtk_icon_theme_name(Some("Adwaita"));
+    }
+}
+
 fn install_css() {
     let provider = gtk4::CssProvider::new();
     provider.load_from_data(
@@ -324,6 +344,35 @@ fn install_css() {
         .sidebar-notification {
             color: @accent_color;
             font-weight: 600;
+        }
+
+        .sidebar-branch {
+            color: @accent_color;
+        }
+
+        .sidebar-status-row {
+            margin-top: 1px;
+        }
+
+        .sidebar-progress-bar {
+            min-height: 4px;
+            border-radius: 2px;
+        }
+
+        .sidebar-log-success {
+            color: #2ec27e;
+        }
+
+        .sidebar-log-warning {
+            color: #e5a50a;
+        }
+
+        .sidebar-log-error {
+            color: #e01b24;
+        }
+
+        .sidebar-log-progress {
+            color: @accent_color;
         }
 
         .panel-shell {
