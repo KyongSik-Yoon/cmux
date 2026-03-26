@@ -222,27 +222,14 @@ fn activate(app: &adw::Application, state: &Rc<AppState>) {
     state.shared.install_ui_event_sender(ui_event_tx);
 
     init_ghostty(state);
-    sync_color_scheme(state);
+
+    // Force dark color scheme for the window so that ghostty's
+    // background-opacity blends against a dark surface, matching
+    // the native ghostty behavior with window-theme = dark.
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
 
     // Create the main window
     let window = ui::window::create_window(app, state, ui_event_rx);
-
-    // Monitor ongoing dark/light mode changes from the system
-    {
-        let state = state.clone();
-        let style = adw::StyleManager::default();
-        style.connect_dark_notify(move |mgr| {
-            let scheme = if mgr.is_dark() {
-                ghostty_color_scheme_e::GHOSTTY_COLOR_SCHEME_DARK
-            } else {
-                ghostty_color_scheme_e::GHOSTTY_COLOR_SCHEME_LIGHT
-            };
-            if let Some(app) = state.ghostty_app.borrow().as_ref() {
-                app.set_color_scheme(scheme);
-            }
-        });
-    }
-
     window.present();
 }
 
