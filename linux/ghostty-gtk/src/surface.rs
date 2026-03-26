@@ -487,10 +487,17 @@ impl GhosttyGlSurface {
 
                     if ime_handled {
                         let is_composing = self.imp().im_composing.get();
-                        let has_committed_text = !self.imp().im_commit_text.borrow().is_empty();
-                        if is_composing || was_composing || !has_committed_text {
+                        let has_committed_text =
+                            !self.imp().im_commit_text.borrow().is_empty();
+                        if is_composing || was_composing {
                             return glib::Propagation::Stop;
                         }
+                        // IME claimed "handled" but we weren't composing.
+                        // If it committed text, fall through so ghostty
+                        // associates it with this key event (normal typing).
+                        // If it committed nothing, the IME just observed the
+                        // key (e.g. kime checking for hangul toggle) — fall
+                        // through so ghostty still processes the key.
                     }
                 }
             }
@@ -537,6 +544,16 @@ impl GhosttyGlSurface {
             ptr::null()
         };
 
+        // Consumed modifiers: modifiers that were used by the keymap to
+        // produce the keyval (e.g. Shift is consumed when turning `;` into `:`).
+        // Without this, ghostty sees Shift+`:` instead of just `:`.
+        let consumed_mods = controller
+            .current_event()
+            .and_then(|ev| ev.downcast_ref::<gdk4::KeyEvent>().map(|ke| {
+                keys::gdk_mods_to_ghostty(ke.consumed_modifiers())
+            }))
+            .unwrap_or(0);
+
         // Unshifted codepoint: the unicode value of the key without Shift.
         // Translate the hardware keycode with no modifiers but preserving the
         // keyboard group (layout) from the current event.
@@ -558,7 +575,7 @@ impl GhosttyGlSurface {
         let key_event = ghostty_input_key_s {
             action,
             mods,
-            consumed_mods: 0,
+            consumed_mods,
             keycode,
             text: text_ptr,
             unshifted_codepoint,
