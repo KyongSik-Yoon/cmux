@@ -48,9 +48,15 @@ pub fn create_window(
     let content_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     content_box.set_hexpand(true);
     content_box.set_vexpand(true);
+    // Make content containers transparent so the window's "background" CSS
+    // class is the only opaque layer. Without this, Adwaita's default
+    // container backgrounds (slightly lighter) bleed through the GL surface
+    // whose renderer clears to transparent rgba(0,0,0,0).
+    content_box.add_css_class("transparent");
     rebuild_content(&content_box, state);
 
     let content_page = adw::NavigationPage::new(&content_box, "Terminal");
+    content_page.add_css_class("transparent");
     split_view.set_content(Some(&content_page));
 
     bind_sidebar_selection(&list_box, &content_box, state);
@@ -381,10 +387,15 @@ fn install_css() {
             color: @accent_color;
         }
 
+        .transparent {
+            background-color: transparent;
+        }
+
         .panel-shell {
             border: 1px solid rgba(127, 127, 127, 0.18);
             border-radius: 10px;
             padding: 3px;
+            background-color: transparent;
         }
 
         .attention-panel {
