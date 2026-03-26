@@ -222,9 +222,27 @@ fn activate(app: &adw::Application, state: &Rc<AppState>) {
     state.shared.install_ui_event_sender(ui_event_tx);
 
     init_ghostty(state);
+    sync_color_scheme(state);
 
     // Create the main window
     let window = ui::window::create_window(app, state, ui_event_rx);
+
+    // Monitor ongoing dark/light mode changes from the system
+    {
+        let state = state.clone();
+        let style = adw::StyleManager::default();
+        style.connect_dark_notify(move |mgr| {
+            let scheme = if mgr.is_dark() {
+                ghostty_color_scheme_e::GHOSTTY_COLOR_SCHEME_DARK
+            } else {
+                ghostty_color_scheme_e::GHOSTTY_COLOR_SCHEME_LIGHT
+            };
+            if let Some(app) = state.ghostty_app.borrow().as_ref() {
+                app.set_color_scheme(scheme);
+            }
+        });
+    }
+
     window.present();
 }
 
@@ -254,6 +272,21 @@ fn init_ghostty(state: &Rc<AppState>) {
         Err(e) => {
             tracing::error!("Failed to create GhosttyApp: {}", e);
         }
+    }
+}
+
+/// Sync the system dark/light mode to the ghostty runtime so that
+/// color-scheme-aware features (e.g. `window-theme = auto`) work correctly.
+/// Without this, Ghostty defaults to light mode, causing a brighter background.
+fn sync_color_scheme(state: &Rc<AppState>) {
+    let style = adw::StyleManager::default();
+    let scheme = if style.is_dark() {
+        ghostty_color_scheme_e::GHOSTTY_COLOR_SCHEME_DARK
+    } else {
+        ghostty_color_scheme_e::GHOSTTY_COLOR_SCHEME_LIGHT
+    };
+    if let Some(app) = state.ghostty_app.borrow().as_ref() {
+        app.set_color_scheme(scheme);
     }
 }
 

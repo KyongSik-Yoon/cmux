@@ -28,6 +28,12 @@ pub fn create_window(
         .default_height(860)
         .build();
 
+    // Add the "background" CSS class so the window has an opaque background.
+    // Without this, the GTK default (slightly transparent) background can bleed
+    // through the GL terminal surface, making the terminal bg appear brighter
+    // than configured. Vanilla Ghostty sets this when background-opacity >= 1.
+    window.add_css_class("background");
+
     let split_view = adw::NavigationSplitView::new();
     split_view.set_min_sidebar_width(220.0);
     split_view.set_max_sidebar_width(360.0);
