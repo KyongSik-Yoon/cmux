@@ -60,6 +60,29 @@ java -jar build/compose/jars/cmux-linux-x64-0.1.0.jar
 
 If the JNI library is unavailable or fails to load, cmux logs a warning and automatically falls back to `ansi`.
 
+## Ghostty Full-Embed Status Check
+
+Run the doctor script to validate whether local artifacts are ready for full Ghostty embedding:
+
+```bash
+./scripts/ghostty-embed-doctor.sh
+```
+
+The doctor checks:
+- Linux platform API presence in `ghostty.h`
+- required exported `ghostty_*` symbols
+- runtime `dlopen` viability (detects unresolved symbols such as `gladLoaderLoadGLContext`)
+- whether current Linux ABI still requires `GtkGLArea` (`gl_area`)
+
+Environment overrides:
+
+```bash
+export CMUX_GHOSTTY_HEADER=/absolute/path/to/ghostty.h
+export CMUX_GHOSTTY_LIB=/absolute/path/to/libghostty.so
+```
+
+At app startup, cmux also logs a one-line `ghostty-embed` status with detected library/header path and fallback reason.
+
 ## Package
 
 ```bash
