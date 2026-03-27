@@ -6,6 +6,7 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.*
+import com.cmux.ghostty.GhosttyEmbedding
 import com.cmux.ui.theme.CmuxColors
 
 fun main() = application {
@@ -13,6 +14,19 @@ fun main() = application {
 
     // Start terminals and socket server
     LaunchedEffect(Unit) {
+        val requestedEngine = System.getenv("CMUX_TERMINAL_ENGINE")
+            ?.trim()
+            ?.lowercase()
+            ?.ifEmpty { "ansi" }
+            ?: "ansi"
+        val embeddingProbe = GhosttyEmbedding.probe()
+        System.err.println(
+            "cmux: ghostty-embed requestedEngine=$requestedEngine " +
+                "usableInCompose=${embeddingProbe.usableInCompose} " +
+                "lib=${embeddingProbe.libraryPath ?: "none"} " +
+                "header=${embeddingProbe.headerPath ?: "none"} " +
+                "reason=${embeddingProbe.reason}"
+        )
         state.start()
     }
 
