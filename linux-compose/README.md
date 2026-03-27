@@ -68,6 +68,20 @@ Run the doctor script to validate whether local artifacts are ready for full Gho
 ./scripts/ghostty-embed-doctor.sh
 ```
 
+If `runtime direct` fails with `gladLoaderLoadGLContext`, build host helper libs first:
+
+```bash
+./scripts/build-ghostty-host-libs.sh
+```
+
+To verify that Ghostty can actually create a Linux `GtkGLArea` surface on your desktop stack:
+
+```bash
+./scripts/ghostty-gtk-surface-probe.sh
+```
+
+If this probe succeeds but cmux still cannot full-embed, the remaining work is Compose↔GTK host-widget bridging, not Ghostty runtime/bootstrap.
+
 The doctor checks:
 - Linux platform API presence in `ghostty.h`
 - required exported `ghostty_*` symbols
@@ -79,6 +93,7 @@ Environment overrides:
 ```bash
 export CMUX_GHOSTTY_HEADER=/absolute/path/to/ghostty.h
 export CMUX_GHOSTTY_LIB=/absolute/path/to/libghostty.so
+export CMUX_GHOSTTY_GLAD_LIB=/absolute/path/to/libcmux_glad.so
 ```
 
 At app startup, cmux also logs a one-line `ghostty-embed` status with detected library/header path and fallback reason.
