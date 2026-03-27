@@ -12,6 +12,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.*
@@ -40,6 +42,7 @@ import java.awt.KeyEventDispatcher
 fun TerminalView(
     terminal: Terminal,
     modifier: Modifier = Modifier,
+    autoFocus: Boolean = true,
     onFocused: () -> Unit = {}
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -83,10 +86,18 @@ fun TerminalView(
             when (awtEvent.id) {
                 java.awt.event.KeyEvent.KEY_TYPED -> {
                     val ch = awtEvent.keyChar
-                    // Skip control characters (handled by onPreviewKeyEvent)
-                    // and CHAR_UNDEFINED
-                    if (ch != java.awt.event.KeyEvent.CHAR_UNDEFINED && ch.code >= 0x20) {
-                        val input = if (awtEvent.isAltDown) "\u001B${ch}" else ch.toString()
+                    if (ch == java.awt.event.KeyEvent.CHAR_UNDEFINED) return@KeyEventDispatcher false
+
+                    // Fallback path: if Compose KEY_DOWN handling is missed,
+                    // still deliver Enter/Backspace so commands can execute.
+                    val input = when {
+                        ch == '\n' || ch == '\r' -> "\r"
+                        ch == '\b' -> "\u007F"
+                        ch.code >= 0x20 -> if (awtEvent.isAltDown) "\u001B${ch}" else ch.toString()
+                        else -> null
+                    }
+
+                    if (input != null) {
                         terminal.write(input)
                         awtEvent.consume()
                         true
@@ -127,6 +138,9 @@ fun TerminalView(
                 if (it.isFocused) onFocused()
             }
             .focusable()
+            .onPointerEvent(PointerEventType.Press) {
+                focusRequester.requestFocus()
+            }
             .onPreviewKeyEvent { event ->
                 // Handle special keys and control sequences via Compose key events
                 if (event.type == KeyEventType.KeyDown) {
@@ -152,14 +166,18 @@ fun TerminalView(
         }
     }
 
-    // Auto-focus on first composition
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+    // Auto-focus on first composition (only when autoFocus is true)
+    LaunchedEffect(autoFocus) {
+        if (autoFocus) {
+            focusRequester.requestFocus()
+        }
     }
 }
 
 /**
  * Single terminal row rendered as an AnnotatedString.
+ * Batches consecutive characters with the same attributes into a single span
+ * for significantly better rendering performance.
  */
 @Composable
 private fun TerminalRow(
@@ -169,21 +187,42 @@ private fun TerminalRow(
 ) {
     val annotatedString = remember(cells, cursorCol, isFocused) {
         buildAnnotatedString {
-            for ((col, cell) in cells.withIndex()) {
+            var i = 0
+            while (i < cells.size) {
+                val isCursor = i == cursorCol
+                val cell = cells[i]
                 val attrs = cell.attrs
                 val (fg, bg) = resolveColors(attrs)
-                val isCursor = col == cursorCol
 
-                val effectiveFg = when {
-                    isCursor -> CmuxColors.terminalBg
-                    attrs.dim -> fg.copy(alpha = 0.5f)
-                    else -> fg
+                // Cursor cell is always a single-char span
+                if (isCursor) {
+                    withStyle(
+                        SpanStyle(
+                            color = CmuxColors.terminalBg,
+                            background = CmuxColors.primary.copy(alpha = 0.85f),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = CmuxTypography.terminalFontSize,
+                            fontWeight = if (attrs.bold) FontWeight.Bold else FontWeight.Normal,
+                            fontStyle = if (attrs.italic) FontStyle.Italic else FontStyle.Normal,
+                            textDecoration = textDecorationFor(attrs)
+                        )
+                    ) {
+                        val ch = cell.char
+                        append(if (ch == '\u0000') ' ' else ch)
+                    }
+                    i++
+                    continue
                 }
-                val effectiveBg = when {
-                    isCursor -> CmuxColors.primary.copy(alpha = 0.85f)
-                    bg != Color.Transparent -> bg
-                    else -> Color.Unspecified
+
+                // Batch consecutive characters with the same attributes
+                val batchStart = i
+                i++
+                while (i < cells.size && i != cursorCol && cells[i].attrs == attrs) {
+                    i++
                 }
+
+                val effectiveFg = if (attrs.dim) fg.copy(alpha = 0.5f) else fg
+                val effectiveBg = if (bg != Color.Transparent) bg else Color.Unspecified
 
                 withStyle(
                     SpanStyle(
@@ -193,17 +232,13 @@ private fun TerminalRow(
                         fontSize = CmuxTypography.terminalFontSize,
                         fontWeight = if (attrs.bold) FontWeight.Bold else FontWeight.Normal,
                         fontStyle = if (attrs.italic) FontStyle.Italic else FontStyle.Normal,
-                        textDecoration = when {
-                            attrs.underline && attrs.strikethrough ->
-                                TextDecoration.combine(listOf(TextDecoration.Underline, TextDecoration.LineThrough))
-                            attrs.underline -> TextDecoration.Underline
-                            attrs.strikethrough -> TextDecoration.LineThrough
-                            else -> TextDecoration.None
-                        }
+                        textDecoration = textDecorationFor(attrs)
                     )
                 ) {
-                    val ch = cell.char
-                    append(if (ch == '\u0000') ' ' else ch)
+                    for (col in batchStart until i) {
+                        val ch = cells[col].char
+                        append(if (ch == '\u0000') ' ' else ch)
+                    }
                 }
             }
         }
@@ -214,6 +249,14 @@ private fun TerminalRow(
         maxLines = 1,
         softWrap = false,
     )
+}
+
+private fun textDecorationFor(attrs: CellAttributes): TextDecoration = when {
+    attrs.underline && attrs.strikethrough ->
+        TextDecoration.combine(listOf(TextDecoration.Underline, TextDecoration.LineThrough))
+    attrs.underline -> TextDecoration.Underline
+    attrs.strikethrough -> TextDecoration.LineThrough
+    else -> TextDecoration.None
 }
 
 private fun resolveColors(attrs: CellAttributes): Pair<Color, Color> {

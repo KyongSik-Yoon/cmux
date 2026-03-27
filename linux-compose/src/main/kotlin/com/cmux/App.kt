@@ -26,6 +26,7 @@ class AppState {
         private set
     val notificationStore = NotificationStore()
     val socketServer = SocketServer()
+    private val initialCwd = System.getProperty("user.dir") ?: System.getenv("HOME") ?: "/"
 
     // Split pane state
     var splitTerminalId by mutableStateOf<String?>(null)
@@ -45,7 +46,7 @@ class AppState {
     }
 
     fun newTab(): Terminal {
-        val terminal = Terminal()
+        val terminal = Terminal(initialCwd = initialCwd)
         tabs.add(terminal)
         activeTabId = terminal.id
         terminal.start()
@@ -91,7 +92,7 @@ class AppState {
             splitTerminalId = null
             return
         }
-        val terminal = Terminal()
+        val terminal = Terminal(initialCwd = initialCwd)
         tabs.add(terminal)
         terminal.start()
         splitTerminalId = terminal.id
@@ -145,23 +146,31 @@ fun App(state: AppState) {
                             orientation = state.splitOrientation,
                             modifier = Modifier.fillMaxSize(),
                             first = {
-                                TerminalView(
-                                    terminal = activeTerminal,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                                key(activeTerminal.id) {
+                                    TerminalView(
+                                        terminal = activeTerminal,
+                                        autoFocus = true,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
                             },
                             second = {
-                                TerminalView(
-                                    terminal = splitTerminal,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                                key(splitTerminal.id) {
+                                    TerminalView(
+                                        terminal = splitTerminal,
+                                        autoFocus = false,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
                             }
                         )
                     } else {
-                        TerminalView(
-                            terminal = activeTerminal,
-                            modifier = Modifier.fillMaxSize()
-                        )
+                        key(activeTerminal.id) {
+                            TerminalView(
+                                terminal = activeTerminal,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 }
             }

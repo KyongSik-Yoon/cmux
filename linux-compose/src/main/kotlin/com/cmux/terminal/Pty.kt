@@ -17,6 +17,7 @@ interface CLib : Library {
     }
 
     fun forkpty(masterFd: IntByReference, name: ByteArray?, termp: Pointer?, winp: Pointer?): Int
+    fun chdir(path: String): Int
     fun execvp(file: String, argv: Array<String>): Int
     fun read(fd: Int, buf: ByteArray, count: Int): Int
     fun write(fd: Int, buf: ByteArray, count: Int): Int
@@ -66,6 +67,7 @@ class PtyProcess private constructor(
             shell: String = System.getenv("SHELL") ?: "/bin/bash",
             rows: Int = 24,
             cols: Int = 80,
+            cwd: String = System.getProperty("user.home") ?: "/",
             env: Map<String, String> = emptyMap()
         ): PtyProcess {
             val masterFdRef = IntByReference()
@@ -96,6 +98,10 @@ class PtyProcess private constructor(
 
                 for ((k, v) in envVars) {
                     NativeSetenv.setenv(k, v)
+                }
+
+                if (CLib.INSTANCE.chdir(cwd) != 0) {
+                    System.exit(1)
                 }
 
                 CLib.INSTANCE.execvp(shell, arrayOf(shell, "-l"))

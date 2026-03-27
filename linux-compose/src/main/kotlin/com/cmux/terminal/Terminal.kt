@@ -3,6 +3,9 @@ package com.cmux.terminal
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -13,18 +16,21 @@ class Terminal(
     val id: String = java.util.UUID.randomUUID().toString().take(8),
     var cols: Int = 80,
     var rows: Int = 24,
+    private val initialCwd: String = System.getProperty("user.dir") ?: System.getenv("HOME") ?: "/",
     shell: String = System.getenv("SHELL") ?: "/bin/bash"
 ) {
     val buffer = TerminalBuffer(cols, rows)
     val parser = AnsiParser(buffer)
     private var ptyProcess: PtyProcess? = null
     private var readJob: Job? = null
+    private var cwdJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // Version counter for triggering recomposition
     private val _version = MutableStateFlow(0L)
     val version: StateFlow<Long> = _version
     private val versionCounter = AtomicLong(0)
+    private val started = AtomicBoolean(false)
 
     // Terminal state
     private val _alive = MutableStateFlow(true)
@@ -34,26 +40,21 @@ class Terminal(
     val title: StateFlow<String> = _title
 
     // Working directory tracking
-    private val _cwd = MutableStateFlow(System.getenv("HOME") ?: "/")
+    private val _cwd = MutableStateFlow(initialCwd)
     val cwd: StateFlow<String> = _cwd
 
     init {
         parser.onTitleChanged = { newTitle ->
             _title.value = newTitle
-            // Many shells set title to "user@host: /path"
-            val pathMatch = Regex(""":?\s*(.+)""").find(newTitle)
-            pathMatch?.groupValues?.get(1)?.let { path ->
-                if (path.startsWith("/") || path.startsWith("~")) {
-                    _cwd.value = path
-                }
-            }
         }
     }
 
     fun start() {
+        if (!started.compareAndSet(false, true)) return
         val pty = PtyProcess.spawn(
             rows = rows,
             cols = cols,
+            cwd = initialCwd,
             env = mapOf("CMUX" to "1", "CMUX_TAB_ID" to id)
         )
         ptyProcess = pty
@@ -76,6 +77,20 @@ class Terminal(
                 // PTY read error
             } finally {
                 _alive.value = false
+            }
+        }
+
+        cwdJob = scope.launch {
+            val cwdPath = Path.of("/proc", pty.pid.toString(), "cwd")
+            while (isActive && pty.running) {
+                runCatching {
+                    Files.readSymbolicLink(cwdPath).toString()
+                }.getOrNull()?.let { cwd ->
+                    if (cwd != _cwd.value) {
+                        _cwd.value = cwd
+                    }
+                }
+                delay(150)
             }
         }
     }
@@ -105,6 +120,7 @@ class Terminal(
 
     fun destroy() {
         readJob?.cancel()
+        cwdJob?.cancel()
         ptyProcess?.destroy()
         scope.cancel()
         _alive.value = false
