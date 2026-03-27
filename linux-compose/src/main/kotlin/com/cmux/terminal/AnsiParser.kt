@@ -6,7 +6,7 @@ import androidx.compose.ui.graphics.Color
  * ANSI/VT100 escape sequence parser.
  * Processes raw terminal output and updates the TerminalBuffer.
  */
-class AnsiParser(private val buffer: TerminalBuffer) {
+class AnsiParser(private val buffer: TerminalBuffer) : TerminalOutputParser {
 
     private enum class State {
         GROUND,
@@ -32,14 +32,14 @@ class AnsiParser(private val buffer: TerminalBuffer) {
         private set
 
     // Callback for title changes
-    var onTitleChanged: ((String) -> Unit)? = null
+    override var onTitleChanged: ((String) -> Unit)? = null
 
     // UTF-8 decoder state
     private val utf8Buffer = ByteArray(4)
     private var utf8Remaining = 0
     private var utf8Index = 0
 
-    fun feed(data: ByteArray, length: Int) {
+    override fun feed(data: ByteArray, length: Int) {
         var i = 0
         while (i < length) {
             val byte = data[i].toInt() and 0xFF
@@ -95,7 +95,7 @@ class AnsiParser(private val buffer: TerminalBuffer) {
         }
     }
 
-    fun feed(text: String) {
+    override fun feed(text: String) {
         for (ch in text) {
             processChar(ch.code)
         }

@@ -20,7 +20,9 @@ class Terminal(
     shell: String = System.getenv("SHELL") ?: "/bin/bash"
 ) {
     val buffer = TerminalBuffer(cols, rows)
-    val parser = AnsiParser(buffer)
+    private val parserSelection = TerminalParserFactory.create(buffer)
+    val parser: TerminalOutputParser = parserSelection.parser
+    val engine: TerminalEngine = parserSelection.engine
     private var ptyProcess: PtyProcess? = null
     private var readJob: Job? = null
     private var cwdJob: Job? = null
@@ -50,6 +52,9 @@ class Terminal(
     private var perfTotalSnapshotNanos = 0L
 
     init {
+        if (engine == TerminalEngine.GHOSTTY) {
+            System.err.println("cmux: terminal engine=ghostty (ansi-compatible fallback active)")
+        }
         parser.onTitleChanged = { newTitle ->
             _title.value = newTitle
         }

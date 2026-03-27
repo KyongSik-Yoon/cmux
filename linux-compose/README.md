@@ -6,6 +6,7 @@ Linux port of cmux using JetBrains Compose Multiplatform.
 
 - Terminal emulator with PTY support (via JNA `forkpty`)
 - ANSI/VT100 escape sequence parser (SGR colors, cursor movement, alternate screen, scroll regions)
+- Parser backend abstraction (`ansi` default, optional `ghostty` JNI load with safe fallback)
 - Xterm mouse tracking support (DECSET 1000/1002/1003 + SGR 1006)
 - Vertical tab sidebar with live title/cwd tracking
 - Resizable split panes (horizontal/vertical)
@@ -46,6 +47,18 @@ java -jar build/compose/jars/cmux-linux-x64-0.1.0.jar
 Detailed checklist:
 
 - `docs/linux-desktop-smoke-checklist.md`
+
+## Optional Ghostty Parser Backend (WIP)
+
+`ansi` remains the default parser backend. You can request Ghostty backend loading:
+
+```bash
+export CMUX_TERMINAL_ENGINE=ghostty
+export CMUX_GHOSTTY_JNI_LIB=/absolute/path/to/libcmuxghostty.so
+java -jar build/compose/jars/cmux-linux-x64-0.1.0.jar
+```
+
+If the JNI library is unavailable or fails to load, cmux logs a warning and automatically falls back to `ansi`.
 
 ## Package
 
@@ -99,6 +112,8 @@ src/main/kotlin/com/cmux/
 │   ├── Pty.kt                 # Native PTY via JNA (forkpty/execvp)
 │   ├── TerminalBuffer.kt      # Screen buffer with scrollback
 │   ├── AnsiParser.kt          # ANSI escape sequence parser
+│   ├── GhosttyParser.kt       # Ghostty JNI parser adapter (WIP, safe fallback)
+│   ├── TerminalOutputParser.kt # Parser backend abstraction + factory
 │   └── Terminal.kt            # High-level terminal session
 ├── ui/
 │   ├── theme/Theme.kt         # Tokyo Night dark theme
