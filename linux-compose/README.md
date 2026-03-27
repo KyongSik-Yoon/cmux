@@ -82,6 +82,21 @@ To verify that Ghostty can actually create a Linux `GtkGLArea` surface on your d
 
 If this probe succeeds but cmux still cannot full-embed, the remaining work is Compose↔GTK host-widget bridging, not Ghostty runtime/bootstrap.
 
+### Experimental External Ghostty UI Host
+
+You can run Ghostty as a native GTK window managed by cmux terminal tabs:
+
+```bash
+export CMUX_TERMINAL_ENGINE=ghostty
+export CMUX_GHOSTTY_UI_MODE=external-window
+./scripts/build-ghostty-host-libs.sh
+java -jar build/compose/jars/cmux-linux-x64-0.1.0.jar
+```
+
+Notes:
+- This mode is a transition layer and does **not** inline GTK into Compose yet.
+- cmux panel shows host status while actual terminal is rendered in the external GTK window.
+
 The doctor checks:
 - Linux platform API presence in `ghostty.h`
 - required exported `ghostty_*` symbols

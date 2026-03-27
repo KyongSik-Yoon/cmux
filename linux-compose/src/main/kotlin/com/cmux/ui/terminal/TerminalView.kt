@@ -31,7 +31,9 @@ import androidx.compose.ui.unit.dp
 import com.cmux.terminal.Cell
 import com.cmux.terminal.CellAttributes
 import com.cmux.terminal.Terminal
+import com.cmux.terminal.TerminalParserFactory
 import com.cmux.terminal.TerminalSnapshot
+import com.cmux.ghostty.GhosttyExternalWindowHost
 import com.cmux.platform.LinuxClipboard
 import com.cmux.ui.theme.CmuxColors
 import com.cmux.ui.theme.CmuxTypography
@@ -51,6 +53,17 @@ fun TerminalView(
     autoFocus: Boolean = true,
     onFocused: () -> Unit = {}
 ) {
+    val ghosttyExternalModeEnabled = remember {
+        System.getenv("CMUX_GHOSTTY_UI_MODE")
+            ?.trim()
+            ?.lowercase() == "external-window"
+    }
+    val ghosttyRequested = remember { TerminalParserFactory.isGhosttyRequested() }
+    if (ghosttyRequested && ghosttyExternalModeEnabled) {
+        GhosttyExternalWindowTerminalView(terminal = terminal, modifier = modifier)
+        return
+    }
+
     val focusRequester = remember { FocusRequester() }
     var isFocused by remember { mutableStateOf(false) }
     val pressedMouseButtons = remember { mutableSetOf<Int>() }
@@ -215,6 +228,35 @@ fun TerminalView(
         if (autoFocus) {
             focusRequester.requestFocus()
         }
+    }
+}
+
+@Composable
+private fun GhosttyExternalWindowTerminalView(
+    terminal: Terminal,
+    modifier: Modifier = Modifier
+) {
+    DisposableEffect(terminal.id) {
+        GhosttyExternalWindowHost.ensureStarted(terminal)
+        onDispose { GhosttyExternalWindowHost.stop(terminal.id) }
+    }
+
+    val cwd by terminal.cwd.collectAsState()
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(CmuxColors.terminalBg)
+            .padding(16.dp)
+    ) {
+        BasicText(
+            text = "Ghostty native host window active\nterminal=${terminal.id}\ncwd=$cwd",
+            style = TextStyle(
+                color = CmuxColors.onBackground,
+                fontFamily = FontFamily.Monospace,
+                fontSize = CmuxTypography.terminalFontSize
+            )
+        )
     }
 }
 

@@ -40,5 +40,8 @@ object TerminalParserFactory {
         val file = File(raw)
         return if (file.exists() && file.isFile) file.absolutePath else null
     }
-}
 
+    fun isGhosttyRequested(): Boolean {
+        return System.getenv(ENGINE_ENV)?.trim()?.lowercase() == "ghostty"
+    }
+}
