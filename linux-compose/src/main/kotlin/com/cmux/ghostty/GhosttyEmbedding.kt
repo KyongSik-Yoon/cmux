@@ -7,6 +7,7 @@ import java.nio.file.Paths
 
 data class GhosttyEmbeddingProbe(
     val libraryPath: String?,
+    val helperLibraryPath: String?,
     val headerPath: String?,
     val libraryLoaded: Boolean,
     val missingSymbols: List<String>,
@@ -17,6 +18,10 @@ data class GhosttyEmbeddingProbe(
 )
 
 object GhosttyEmbedding {
+    private const val GHOSTTY_LIB_ENV = "CMUX_GHOSTTY_LIB"
+    private const val GHOSTTY_HEADER_ENV = "CMUX_GHOSTTY_HEADER"
+    private const val GHOSTTY_GLAD_LIB_ENV = "CMUX_GHOSTTY_GLAD_LIB"
+
     private val requiredSymbols = listOf(
         "ghostty_init",
         "ghostty_app_new",
@@ -32,7 +37,11 @@ object GhosttyEmbedding {
         val requiresGtkGlAreaHandle = headerText.contains("ghostty_platform_linux_s") &&
             headerText.contains("gl_area")
 
-        val (lib, loadedFromPath, loadError) = loadLibrary()
+        val load = loadLibrary()
+        val lib = load.library
+        val loadedFromPath = load.libraryPath
+        val helperPath = load.helperPath
+        val loadError = load.error
         val missing = if (lib != null) {
             requiredSymbols.filterNot { symbol ->
                 runCatching { lib.getFunction(symbol) }.isSuccess
@@ -61,6 +70,7 @@ object GhosttyEmbedding {
 
         return GhosttyEmbeddingProbe(
             libraryPath = loadedFromPath,
+            helperLibraryPath = helperPath,
             headerPath = headerPath?.toAbsolutePath()?.toString(),
             libraryLoaded = lib != null,
             missingSymbols = missing,
@@ -72,7 +82,7 @@ object GhosttyEmbedding {
     }
 
     private fun resolveHeaderPath(): Path? {
-        val env = System.getenv("CMUX_GHOSTTY_HEADER")?.trim()
+        val env = System.getenv(GHOSTTY_HEADER_ENV)?.trim()
         if (!env.isNullOrEmpty()) {
             val path = Paths.get(env)
             if (Files.isRegularFile(path)) return path
@@ -107,8 +117,8 @@ object GhosttyEmbedding {
         }
     }
 
-    private fun loadLibrary(): Triple<NativeLibrary?, String?, String?> {
-        val env = System.getenv("CMUX_GHOSTTY_LIB")?.trim()
+    private fun loadLibrary(): LibraryLoadResult {
+        val env = System.getenv(GHOSTTY_LIB_ENV)?.trim()
         val cwd = Paths.get(System.getProperty("user.dir") ?: ".")
         val candidates = mutableListOf<String>()
         if (!env.isNullOrEmpty()) {
@@ -120,7 +130,18 @@ object GhosttyEmbedding {
             "ghostty",
         )
 
+        val helperPath = resolveHelperLibraryPath(cwd)
         var firstError: String? = null
+        if (helperPath != null) {
+            val helperLoad = runCatching { NativeLibrary.getInstance(helperPath) }
+            if (helperLoad.isFailure) {
+                val helperError = helperLoad.exceptionOrNull()?.message?.trim()
+                if (!helperError.isNullOrEmpty()) {
+                    firstError = "helper=$helperPath error=$helperError"
+                }
+            }
+        }
+
         for (candidate in candidates.distinct()) {
             if (looksLikePath(candidate) && !Files.isRegularFile(Paths.get(candidate))) {
                 continue
@@ -128,14 +149,38 @@ object GhosttyEmbedding {
             val loadResult = runCatching { NativeLibrary.getInstance(candidate) }
             val lib = loadResult.getOrNull()
             if (lib != null) {
-                return Triple(lib, candidate, null)
+                return LibraryLoadResult(
+                    library = lib,
+                    libraryPath = candidate,
+                    helperPath = helperPath,
+                    error = null
+                )
             }
             val message = loadResult.exceptionOrNull()?.message?.trim()
             if (!message.isNullOrEmpty() && firstError == null) {
                 firstError = "candidate=$candidate error=$message"
             }
         }
-        return Triple(null, null, firstError)
+        return LibraryLoadResult(
+            library = null,
+            libraryPath = null,
+            helperPath = helperPath,
+            error = firstError
+        )
+    }
+
+    private fun resolveHelperLibraryPath(cwd: Path): String? {
+        val env = System.getenv(GHOSTTY_GLAD_LIB_ENV)?.trim()
+        if (!env.isNullOrEmpty() && Files.isRegularFile(Paths.get(env))) {
+            return Paths.get(env).toAbsolutePath().toString()
+        }
+
+        val candidates = listOf(
+            cwd.resolve("build/native/libcmux_glad.so"),
+            cwd.resolve("../linux/target/debug/libcmux_glad.so"),
+            cwd.resolve("/tmp/cmux-ghostty-host/libcmux_glad.so"),
+        )
+        return candidates.firstOrNull { Files.isRegularFile(it) }?.toAbsolutePath()?.toString()
     }
 
     private fun looksLikePath(candidate: String): Boolean {
@@ -146,3 +191,10 @@ object GhosttyEmbedding {
         return runCatching { Files.readString(path) }.getOrDefault("")
     }
 }
+
+private data class LibraryLoadResult(
+    val library: NativeLibrary?,
+    val libraryPath: String?,
+    val helperPath: String?,
+    val error: String?
+)

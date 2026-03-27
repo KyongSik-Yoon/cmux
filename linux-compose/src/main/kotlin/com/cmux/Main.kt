@@ -24,6 +24,7 @@ fun main() = application {
             "cmux: ghostty-embed requestedEngine=$requestedEngine " +
                 "usableInCompose=${embeddingProbe.usableInCompose} " +
                 "lib=${embeddingProbe.libraryPath ?: "none"} " +
+                "helper=${embeddingProbe.helperLibraryPath ?: "none"} " +
                 "header=${embeddingProbe.headerPath ?: "none"} " +
                 "reason=${embeddingProbe.reason}"
         )
