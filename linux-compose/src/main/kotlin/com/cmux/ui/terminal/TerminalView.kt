@@ -28,10 +28,12 @@ import com.cmux.terminal.TerminalSnapshot
 import com.cmux.ui.theme.CmuxColors
 import com.cmux.ui.theme.CmuxTypography
 import kotlinx.coroutines.delay
+import java.awt.KeyboardFocusManager
+import java.awt.KeyEventDispatcher
 
 /**
  * Terminal renderer using AnnotatedString rows.
- * Each row is rendered as a single BasicText with per-character styling.
+ * Uses AWT KeyEventDispatcher for reliable text input capture.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -40,7 +42,6 @@ fun TerminalView(
     modifier: Modifier = Modifier,
     onFocused: () -> Unit = {}
 ) {
-    val density = LocalDensity.current
     val focusRequester = remember { FocusRequester() }
     var isFocused by remember { mutableStateOf(false) }
 
@@ -73,6 +74,33 @@ fun TerminalView(
         }
     }
 
+    // AWT KeyEventDispatcher for capturing KEY_TYPED events (regular character input)
+    // KEY_PRESSED doesn't have keyChar for regular characters in AWT
+    DisposableEffect(terminal, isFocused) {
+        val dispatcher = KeyEventDispatcher { awtEvent ->
+            if (!isFocused) return@KeyEventDispatcher false
+
+            when (awtEvent.id) {
+                java.awt.event.KeyEvent.KEY_TYPED -> {
+                    val ch = awtEvent.keyChar
+                    // Skip control characters (handled by onPreviewKeyEvent)
+                    // and CHAR_UNDEFINED
+                    if (ch != java.awt.event.KeyEvent.CHAR_UNDEFINED && ch.code >= 0x20) {
+                        val input = if (awtEvent.isAltDown) "\u001B${ch}" else ch.toString()
+                        terminal.write(input)
+                        awtEvent.consume()
+                        true
+                    } else false
+                }
+                else -> false
+            }
+        }
+        KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(dispatcher)
+        onDispose {
+            KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(dispatcher)
+        }
+    }
+
     // Cursor blink
     var cursorBlink by remember { mutableStateOf(true) }
     LaunchedEffect(isFocused) {
@@ -100,8 +128,9 @@ fun TerminalView(
             }
             .focusable()
             .onPreviewKeyEvent { event ->
+                // Handle special keys and control sequences via Compose key events
                 if (event.type == KeyEventType.KeyDown) {
-                    val input = keyEventToTerminalInput(event)
+                    val input = keyEventToSpecialInput(event)
                     if (input != null) {
                         terminal.write(input)
                         true
@@ -202,17 +231,17 @@ private fun resolveColors(attrs: CellAttributes): Pair<Color, Color> {
 }
 
 /**
- * Convert Compose key events to terminal escape sequences.
+ * Handle only special keys and control sequences.
+ * Regular character input is handled by the AWT KeyEventDispatcher (KEY_TYPED).
  */
-private fun keyEventToTerminalInput(event: KeyEvent): String? {
+private fun keyEventToSpecialInput(event: KeyEvent): String? {
     val ctrl = event.isCtrlPressed
     val alt = event.isAltPressed
     val shift = event.isShiftPressed
 
-    // Control key combinations
+    // Control key combinations (Ctrl+A through Ctrl+Z)
     if (ctrl && !alt) {
-        val key = event.key
-        return when (key) {
+        return when (event.key) {
             Key.A -> "\u0001"
             Key.B -> "\u0002"
             Key.C -> "\u0003"
@@ -243,7 +272,7 @@ private fun keyEventToTerminalInput(event: KeyEvent): String? {
         }
     }
 
-    // Special keys
+    // Special keys only (Enter, Backspace, arrows, function keys, etc.)
     return when (event.key) {
         Key.Enter -> "\r"
         Key.Backspace -> "\u007F"
@@ -271,27 +300,6 @@ private fun keyEventToTerminalInput(event: KeyEvent): String? {
         Key.F10 -> "\u001B[21~"
         Key.F11 -> "\u001B[23~"
         Key.F12 -> "\u001B[24~"
-        else -> {
-            // Regular character input
-            val char = event.utf16CodePoint
-            if (char > 0x1F) {
-                val ch = char.toChar()
-                if (alt) "\u001B${ch}" else ch.toString()
-            } else null
-        }
+        else -> null  // Regular chars handled by AWT KEY_TYPED dispatcher
     }
 }
-
-// Extension to get UTF-16 code point from key event
-private val KeyEvent.utf16CodePoint: Int
-    get() {
-        return try {
-            val nativeEvent = this.nativeKeyEvent
-            if (nativeEvent is java.awt.event.KeyEvent) {
-                nativeEvent.keyChar.code
-            } else 0
-        } catch (e: Exception) {
-            0
-        }
-    }
-
