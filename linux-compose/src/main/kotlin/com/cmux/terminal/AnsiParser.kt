@@ -338,6 +338,7 @@ class AnsiParser(private val buffer: TerminalBuffer) {
                             buffer.saveCursor()
                             buffer.enableAltScreen()
                         }
+                        1000, 1002, 1003, 1006 -> buffer.setMouseTrackingMode(p, true)
                         2004 -> { /* Bracketed paste mode */ }
                     }
                 }
@@ -352,6 +353,7 @@ class AnsiParser(private val buffer: TerminalBuffer) {
                             buffer.disableAltScreen()
                             buffer.restoreCursor()
                         }
+                        1000, 1002, 1003, 1006 -> buffer.setMouseTrackingMode(p, false)
                         2004 -> { /* Disable bracketed paste */ }
                     }
                 }

@@ -12,7 +12,12 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.input.pointer.PointerButtons
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isPrimaryPressed
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -27,6 +32,7 @@ import com.cmux.terminal.Cell
 import com.cmux.terminal.CellAttributes
 import com.cmux.terminal.Terminal
 import com.cmux.terminal.TerminalSnapshot
+import com.cmux.platform.LinuxClipboard
 import com.cmux.ui.theme.CmuxColors
 import com.cmux.ui.theme.CmuxTypography
 import kotlinx.coroutines.delay
@@ -47,6 +53,7 @@ fun TerminalView(
 ) {
     val focusRequester = remember { FocusRequester() }
     var isFocused by remember { mutableStateOf(false) }
+    val pressedMouseButtons = remember { mutableSetOf<Int>() }
 
     // Subscribe to terminal updates
     val version by terminal.version.collectAsState()
@@ -140,10 +147,47 @@ fun TerminalView(
             .focusable()
             .onPointerEvent(PointerEventType.Press) {
                 focusRequester.requestFocus()
+                dispatchMouseEvent(
+                    terminal = terminal,
+                    event = it,
+                    eventType = PointerEventType.Press,
+                    cellSize = cellSize,
+                    pressedButtons = pressedMouseButtons
+                )
+            }
+            .onPointerEvent(PointerEventType.Release) {
+                dispatchMouseEvent(
+                    terminal = terminal,
+                    event = it,
+                    eventType = PointerEventType.Release,
+                    cellSize = cellSize,
+                    pressedButtons = pressedMouseButtons
+                )
+            }
+            .onPointerEvent(PointerEventType.Move) {
+                dispatchMouseEvent(
+                    terminal = terminal,
+                    event = it,
+                    eventType = PointerEventType.Move,
+                    cellSize = cellSize,
+                    pressedButtons = pressedMouseButtons
+                )
+            }
+            .onPointerEvent(PointerEventType.Scroll) {
+                dispatchMouseEvent(
+                    terminal = terminal,
+                    event = it,
+                    eventType = PointerEventType.Scroll,
+                    cellSize = cellSize,
+                    pressedButtons = pressedMouseButtons
+                )
             }
             .onPreviewKeyEvent { event ->
                 // Handle special keys and control sequences via Compose key events
                 if (event.type == KeyEventType.KeyDown) {
+                    if (handleClipboardPasteShortcut(event, terminal)) {
+                        return@onPreviewKeyEvent true
+                    }
                     val input = keyEventToSpecialInput(event)
                     if (input != null) {
                         terminal.write(input)
@@ -171,6 +215,104 @@ fun TerminalView(
         if (autoFocus) {
             focusRequester.requestFocus()
         }
+    }
+}
+
+private fun handleClipboardPasteShortcut(event: KeyEvent, terminal: Terminal): Boolean {
+    val ctrlOrMeta = event.isCtrlPressed || event.isMetaPressed
+    val shift = event.isShiftPressed
+
+    if (ctrlOrMeta && shift && event.key == Key.V) {
+        val text = LinuxClipboard.readClipboardText() ?: return true
+        terminal.write(normalizePastedText(text))
+        return true
+    }
+
+    if (shift && event.key == Key.Insert) {
+        val text = LinuxClipboard.readPrimarySelectionText()
+            ?: LinuxClipboard.readClipboardText()
+            ?: return true
+        terminal.write(normalizePastedText(text))
+        return true
+    }
+
+    return false
+}
+
+private fun normalizePastedText(text: String): String {
+    return text.replace("\r\n", "\n")
+}
+
+private fun dispatchMouseEvent(
+    terminal: Terminal,
+    event: PointerEvent,
+    eventType: PointerEventType,
+    cellSize: IntSize,
+    pressedButtons: MutableSet<Int>
+) {
+    val mode = terminal.getMouseTrackingState()
+    if (!mode.enabled) return
+    if (cellSize.width <= 0 || cellSize.height <= 0) return
+
+    val change = event.changes.firstOrNull() ?: return
+    val col = (change.position.x / cellSize.width).toInt().coerceAtLeast(0) + 1
+    val row = (change.position.y / cellSize.height).toInt().coerceAtLeast(0) + 1
+
+    when (eventType) {
+        PointerEventType.Press -> {
+            val button = mouseButtonCode(event.buttons) ?: return
+            pressedButtons.add(button)
+            terminal.write(encodeMouseSequence(mode.sgrMode, button, col, row, press = true, drag = false))
+        }
+        PointerEventType.Release -> {
+            val button = pressedButtons.firstOrNull() ?: mouseButtonCode(event.buttons) ?: 0
+            pressedButtons.remove(button)
+            terminal.write(encodeMouseSequence(mode.sgrMode, button, col, row, press = false, drag = false))
+        }
+        PointerEventType.Move -> {
+            val activeButton = pressedButtons.firstOrNull()
+            if (mode.anyEventTracking || (mode.buttonEventTracking && activeButton != null)) {
+                val button = activeButton ?: 3
+                terminal.write(encodeMouseSequence(mode.sgrMode, button, col, row, press = true, drag = true))
+            }
+        }
+        PointerEventType.Scroll -> {
+            val dy = change.scrollDelta.y
+            if (dy == 0f) return
+            val wheelCode = if (dy < 0f) 64 else 65
+            terminal.write(encodeMouseSequence(mode.sgrMode, wheelCode, col, row, press = true, drag = false))
+        }
+        else -> Unit
+    }
+}
+
+private fun mouseButtonCode(buttons: PointerButtons): Int? {
+    return when {
+        buttons.isPrimaryPressed -> 0
+        buttons.isTertiaryPressed -> 1
+        buttons.isSecondaryPressed -> 2
+        else -> null
+    }
+}
+
+private fun encodeMouseSequence(
+    sgrMode: Boolean,
+    button: Int,
+    col: Int,
+    row: Int,
+    press: Boolean,
+    drag: Boolean
+): String {
+    val cb = if (drag) button + 32 else button
+    return if (sgrMode) {
+        val suffix = if (press) "M" else "m"
+        "\u001B[<${cb};${col};${row}${suffix}"
+    } else {
+        val legacyCode = if (press) cb else 3
+        val legacyCb = (legacyCode + 32).coerceAtMost(255)
+        val legacyCol = (col + 32).coerceAtMost(255)
+        val legacyRow = (row + 32).coerceAtMost(255)
+        "\u001B[M${legacyCb.toChar()}${legacyCol.toChar()}${legacyRow.toChar()}"
     }
 }
 

@@ -26,6 +26,16 @@ data class Cell(
     val width: Int = 1 // 1 for normal, 2 for wide chars
 )
 
+data class MouseTrackingState(
+    val basicTracking: Boolean = false,        // DECSET 1000
+    val buttonEventTracking: Boolean = false,  // DECSET 1002
+    val anyEventTracking: Boolean = false,     // DECSET 1003
+    val sgrMode: Boolean = false               // DECSET 1006
+) {
+    val enabled: Boolean
+        get() = basicTracking || buttonEventTracking || anyEventTracking
+}
+
 /**
  * Terminal screen buffer with scrollback.
  */
@@ -72,6 +82,47 @@ class TerminalBuffer(
 
     // Tab stops (default every 8 columns)
     private val tabStops: MutableSet<Int> = (0 until cols step 8).toMutableSet()
+    private var mouseTrackingState = MouseTrackingState()
+    private val dirtyRows: MutableSet<Int> = mutableSetOf<Int>().apply {
+        addAll(0 until rows)
+    }
+
+    private fun markDirtyRow(row: Int) {
+        if (row in 0 until rows) dirtyRows.add(row)
+    }
+
+    private fun markDirtyRange(startRow: Int, endRow: Int) {
+        val start = startRow.coerceAtLeast(0)
+        val end = endRow.coerceAtMost(rows - 1)
+        if (start > end) return
+        for (row in start..end) {
+            dirtyRows.add(row)
+        }
+    }
+
+    private fun markAllDirty() {
+        dirtyRows.clear()
+        dirtyRows.addAll(0 until rows)
+    }
+
+    fun consumeDirtyRows(): IntArray {
+        if (dirtyRows.isEmpty()) return IntArray(0)
+        val out = dirtyRows.sorted().toIntArray()
+        dirtyRows.clear()
+        return out
+    }
+
+    fun getMouseTrackingState(): MouseTrackingState = mouseTrackingState
+
+    fun setMouseTrackingMode(mode: Int, enabled: Boolean) {
+        mouseTrackingState = when (mode) {
+            1000 -> mouseTrackingState.copy(basicTracking = enabled)
+            1002 -> mouseTrackingState.copy(buttonEventTracking = enabled)
+            1003 -> mouseTrackingState.copy(anyEventTracking = enabled)
+            1006 -> mouseTrackingState.copy(sgrMode = enabled)
+            else -> mouseTrackingState
+        }
+    }
 
     private fun newLine(): MutableList<Cell> = MutableList(cols) { Cell() }
 
@@ -93,6 +144,7 @@ class TerminalBuffer(
         }
         if (cursorRow in 0 until rows && cursorCol in 0 until cols) {
             screen[cursorRow][cursorCol] = Cell(ch, currentAttrs)
+            markDirtyRow(cursorRow)
             cursorCol++
         }
     }
@@ -156,11 +208,13 @@ class TerminalBuffer(
         }
         screen.removeAt(scrollTop)
         screen.add(scrollBottom, newLine())
+        markAllDirty()
     }
 
     private fun scrollDown() {
         screen.removeAt(scrollBottom)
         screen.add(scrollTop, newLine())
+        markAllDirty()
     }
 
     fun scrollUpN(n: Int) {
@@ -177,14 +231,17 @@ class TerminalBuffer(
                 for (i in cursorCol until cols) {
                     screen[cursorRow][i] = Cell(attrs = currentAttrs)
                 }
+                markDirtyRow(cursorRow)
             }
             1 -> { // Erase from start of line to cursor
                 for (i in 0..cursorCol.coerceAtMost(cols - 1)) {
                     screen[cursorRow][i] = Cell(attrs = currentAttrs)
                 }
+                markDirtyRow(cursorRow)
             }
             2 -> { // Erase entire line
                 screen[cursorRow] = newLine()
+                markDirtyRow(cursorRow)
             }
         }
     }
@@ -196,17 +253,20 @@ class TerminalBuffer(
                 for (i in (cursorRow + 1) until rows) {
                     screen[i] = newLine()
                 }
+                markDirtyRange(cursorRow, rows - 1)
             }
             1 -> { // Erase from start of screen to cursor
                 for (i in 0 until cursorRow) {
                     screen[i] = newLine()
                 }
                 eraseInLine(1)
+                markDirtyRange(0, cursorRow)
             }
             2, 3 -> { // Erase entire screen
                 for (i in 0 until rows) {
                     screen[i] = newLine()
                 }
+                markAllDirty()
             }
         }
     }
@@ -217,6 +277,7 @@ class TerminalBuffer(
             screen.removeAt(scrollBottom)
             screen.add(cursorRow, newLine())
         }
+        if (count > 0) markAllDirty()
     }
 
     fun deleteLines(n: Int) {
@@ -225,6 +286,7 @@ class TerminalBuffer(
             screen.removeAt(cursorRow)
             screen.add(scrollBottom, newLine())
         }
+        if (count > 0) markAllDirty()
     }
 
     fun insertChars(n: Int) {
@@ -234,6 +296,7 @@ class TerminalBuffer(
             line.add(cursorCol, Cell(attrs = currentAttrs))
             if (line.size > cols) line.removeAt(line.size - 1)
         }
+        if (count > 0) markDirtyRow(cursorRow)
     }
 
     fun deleteChars(n: Int) {
@@ -245,6 +308,7 @@ class TerminalBuffer(
                 line.add(Cell(attrs = currentAttrs))
             }
         }
+        if (count > 0) markDirtyRow(cursorRow)
     }
 
     fun eraseChars(n: Int) {
@@ -252,6 +316,7 @@ class TerminalBuffer(
         for (i in cursorCol until (cursorCol + count).coerceAtMost(cols)) {
             screen[cursorRow][i] = Cell(attrs = currentAttrs)
         }
+        if (count > 0) markDirtyRow(cursorRow)
     }
 
     fun setScrollRegion(top: Int, bottom: Int) {
@@ -292,6 +357,7 @@ class TerminalBuffer(
         cursorRow = 0
         cursorCol = 0
         isAltScreen = true
+        markAllDirty()
     }
 
     fun disableAltScreen() {
@@ -305,6 +371,7 @@ class TerminalBuffer(
         cursorCol = altCursorCol
         altScreen = null
         isAltScreen = false
+        markAllDirty()
     }
 
     fun resize(newRows: Int, newCols: Int) {
@@ -340,6 +407,7 @@ class TerminalBuffer(
         // Clamp cursor
         cursorRow = cursorRow.coerceIn(0, rows - 1)
         cursorCol = cursorCol.coerceIn(0, cols - 1)
+        markAllDirty()
     }
 
     fun reset() {
@@ -355,6 +423,8 @@ class TerminalBuffer(
         scrollback.clear()
         altScreen = null
         isAltScreen = false
+        mouseTrackingState = MouseTrackingState()
+        markAllDirty()
     }
 
     val scrollbackSize: Int get() = scrollback.size

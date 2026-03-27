@@ -42,6 +42,12 @@ class Terminal(
     // Working directory tracking
     private val _cwd = MutableStateFlow(initialCwd)
     val cwd: StateFlow<String> = _cwd
+    private var cachedLines: MutableList<List<Cell>> = mutableListOf()
+    private var snapshotInitialized = false
+    private val perfLogEnabled = System.getenv("CMUX_PERF_LOG") == "1"
+    private var perfSampleCount = 0
+    private var perfTotalCopiedRows = 0L
+    private var perfTotalSnapshotNanos = 0L
 
     init {
         parser.onTitleChanged = { newTitle ->
@@ -107,6 +113,12 @@ class Terminal(
         write(key)
     }
 
+    fun getMouseTrackingState(): MouseTrackingState {
+        synchronized(buffer) {
+            return buffer.getMouseTrackingState()
+        }
+    }
+
     fun resize(newCols: Int, newRows: Int) {
         if (newCols == cols && newRows == rows) return
         cols = newCols
@@ -128,11 +140,45 @@ class Terminal(
 
     fun getSnapshot(): TerminalSnapshot {
         synchronized(buffer) {
-            val lines = (0 until rows).map { row ->
-                buffer.getLine(row).toList()
+            val startNs = if (perfLogEnabled) System.nanoTime() else 0L
+            var copiedRows = 0
+
+            if (!snapshotInitialized || cachedLines.size != rows) {
+                cachedLines = MutableList(rows) { row ->
+                    buffer.getLine(row).toList()
+                }
+                buffer.consumeDirtyRows()
+                snapshotInitialized = true
+                copiedRows = rows
+            } else {
+                val dirtyRows = buffer.consumeDirtyRows()
+                for (row in dirtyRows) {
+                    if (row in 0 until rows) {
+                        cachedLines[row] = buffer.getLine(row).toList()
+                        copiedRows++
+                    }
+                }
             }
+
+            if (perfLogEnabled) {
+                perfSampleCount++
+                perfTotalCopiedRows += copiedRows.toLong()
+                perfTotalSnapshotNanos += System.nanoTime() - startNs
+                if (perfSampleCount % 120 == 0) {
+                    val avgMs = perfTotalSnapshotNanos.toDouble() / perfSampleCount / 1_000_000.0
+                    val avgRows = perfTotalCopiedRows.toDouble() / perfSampleCount.toDouble()
+                    System.err.println(
+                        "cmux.perf snapshot avgMs=" +
+                            "%.3f".format(avgMs) +
+                            " avgCopiedRows=" +
+                            "%.2f".format(avgRows) +
+                            " rows=$rows cols=$cols"
+                    )
+                }
+            }
+
             return TerminalSnapshot(
-                lines = lines,
+                lines = cachedLines.toList(),
                 cursorRow = buffer.cursorRow,
                 cursorCol = buffer.cursorCol,
                 cursorVisible = buffer.cursorVisible,
