@@ -7,6 +7,8 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.cmux.ghostty.GhosttyEmbedding
+import com.cmux.ghostty.GhosttyRuntimeSession
 import com.cmux.socket.SocketServer
 import com.cmux.terminal.Terminal
 import com.cmux.ui.notification.NotificationStore
@@ -27,6 +29,7 @@ class AppState {
     val notificationStore = NotificationStore()
     val socketServer = SocketServer()
     private val initialCwd = System.getProperty("user.dir") ?: System.getenv("HOME") ?: "/"
+    private var ghosttyRuntimeSession: GhosttyRuntimeSession? = null
 
     // Split pane state
     var splitTerminalId by mutableStateOf<String?>(null)
@@ -101,6 +104,7 @@ class AppState {
 
     fun start() {
         socketServer.start()
+        ensureGhosttyRuntime()
         if (tabs.isEmpty()) {
             newTab()
         }
@@ -108,8 +112,25 @@ class AppState {
 
     fun shutdown() {
         socketServer.stop()
+        ghosttyRuntimeSession?.close()
+        ghosttyRuntimeSession = null
         tabs.forEach { it.destroy() }
         tabs.clear()
+    }
+
+    private fun ensureGhosttyRuntime() {
+        if (ghosttyRuntimeSession != null) return
+
+        val requested = System.getenv("CMUX_TERMINAL_ENGINE")
+            ?.trim()
+            ?.lowercase()
+            ?: return
+        if (requested != "ghostty") return
+
+        val probe = GhosttyEmbedding.probe()
+        val start = GhosttyRuntimeSession.start(probe)
+        ghosttyRuntimeSession = start.session
+        System.err.println("cmux: ${start.reason}")
     }
 }
 
