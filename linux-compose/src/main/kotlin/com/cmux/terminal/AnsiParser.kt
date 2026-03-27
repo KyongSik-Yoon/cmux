@@ -34,24 +34,77 @@ class AnsiParser(private val buffer: TerminalBuffer) {
     // Callback for title changes
     var onTitleChanged: ((String) -> Unit)? = null
 
+    // UTF-8 decoder state
+    private val utf8Buffer = ByteArray(4)
+    private var utf8Remaining = 0
+    private var utf8Index = 0
+
     fun feed(data: ByteArray, length: Int) {
         var i = 0
         while (i < length) {
             val byte = data[i].toInt() and 0xFF
-            processByte(byte)
+
+            // If we're in the middle of a UTF-8 sequence
+            if (utf8Remaining > 0) {
+                if (byte and 0xC0 == 0x80) { // continuation byte
+                    utf8Buffer[utf8Index++] = byte.toByte()
+                    utf8Remaining--
+                    if (utf8Remaining == 0) {
+                        // Decode complete UTF-8 sequence
+                        val str = String(utf8Buffer, 0, utf8Index, Charsets.UTF_8)
+                        for (ch in str) {
+                            processChar(ch.code)
+                        }
+                    }
+                } else {
+                    // Invalid continuation, reset and reprocess this byte
+                    utf8Remaining = 0
+                    utf8Index = 0
+                    processChar(byte)
+                }
+                i++
+                continue
+            }
+
+            // Check for multi-byte UTF-8 start
+            when {
+                byte < 0x80 -> {
+                    // ASCII - process directly
+                    processChar(byte)
+                }
+                byte and 0xE0 == 0xC0 -> { // 2-byte sequence
+                    utf8Buffer[0] = byte.toByte()
+                    utf8Index = 1
+                    utf8Remaining = 1
+                }
+                byte and 0xF0 == 0xE0 -> { // 3-byte sequence
+                    utf8Buffer[0] = byte.toByte()
+                    utf8Index = 1
+                    utf8Remaining = 2
+                }
+                byte and 0xF8 == 0xF0 -> { // 4-byte sequence
+                    utf8Buffer[0] = byte.toByte()
+                    utf8Index = 1
+                    utf8Remaining = 3
+                }
+                else -> {
+                    // Invalid byte, skip
+                }
+            }
             i++
         }
     }
 
     fun feed(text: String) {
-        val bytes = text.toByteArray()
-        feed(bytes, bytes.size)
+        for (ch in text) {
+            processChar(ch.code)
+        }
     }
 
-    private fun processByte(byte: Int) {
+    private fun processChar(codePoint: Int) {
         // Handle C0 control characters in any state
-        if (byte < 0x20 && state != State.OSC && state != State.OSC_STRING && state != State.DCS) {
-            when (byte) {
+        if (codePoint < 0x20 && state != State.OSC && state != State.OSC_STRING && state != State.DCS) {
+            when (codePoint) {
                 0x07 -> { /* BEL - ignore */ }
                 0x08 -> buffer.backspace()
                 0x09 -> buffer.tab()
@@ -67,16 +120,16 @@ class AnsiParser(private val buffer: TerminalBuffer) {
                 }
                 // 0x00-0x06, 0x0E, 0x0F, etc. - ignore
             }
-            if (byte != 0x1B) return
+            if (codePoint != 0x1B) return
         }
 
         when (state) {
-            State.GROUND -> processGround(byte)
-            State.ESCAPE -> processEscape(byte)
-            State.CSI_ENTRY, State.CSI_PARAM -> processCSI(byte)
-            State.CSI_INTERMEDIATE -> processCSIIntermediate(byte)
-            State.OSC, State.OSC_STRING -> processOSC(byte)
-            State.DCS -> processDCS(byte)
+            State.GROUND -> processGround(codePoint)
+            State.ESCAPE -> processEscape(codePoint)
+            State.CSI_ENTRY, State.CSI_PARAM -> processCSI(codePoint)
+            State.CSI_INTERMEDIATE -> processCSIIntermediate(codePoint)
+            State.OSC, State.OSC_STRING -> processOSC(codePoint)
+            State.DCS -> processDCS(codePoint)
             State.CHARSET -> {
                 // Consume one character for charset designation and return to ground
                 state = State.GROUND
@@ -84,10 +137,16 @@ class AnsiParser(private val buffer: TerminalBuffer) {
         }
     }
 
-    private fun processGround(byte: Int) {
-        if (byte >= 0x20) {
-            val ch = byte.toChar()
-            buffer.putChar(ch)
+    private fun processGround(codePoint: Int) {
+        if (codePoint >= 0x20) {
+            // Handle supplementary (surrogate pair) characters
+            if (codePoint > 0xFFFF) {
+                for (ch in String(Character.toChars(codePoint))) {
+                    buffer.putChar(ch)
+                }
+            } else {
+                buffer.putChar(codePoint.toChar())
+            }
         }
     }
 

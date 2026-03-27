@@ -1,19 +1,16 @@
 package com.cmux.ui.terminal
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -21,8 +18,9 @@ import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.dp
 import com.cmux.terminal.Cell
 import com.cmux.terminal.CellAttributes
 import com.cmux.terminal.Terminal
@@ -30,10 +28,12 @@ import com.cmux.terminal.TerminalSnapshot
 import com.cmux.ui.theme.CmuxColors
 import com.cmux.ui.theme.CmuxTypography
 import kotlinx.coroutines.delay
+import java.awt.KeyboardFocusManager
+import java.awt.KeyEventDispatcher
 
 /**
- * Compose Canvas-based terminal renderer.
- * Renders the terminal buffer directly to a Canvas for performance.
+ * Terminal renderer using AnnotatedString rows.
+ * Uses AWT KeyEventDispatcher for reliable text input capture.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -42,14 +42,13 @@ fun TerminalView(
     modifier: Modifier = Modifier,
     onFocused: () -> Unit = {}
 ) {
-    val density = LocalDensity.current
     val focusRequester = remember { FocusRequester() }
     var isFocused by remember { mutableStateOf(false) }
 
     // Subscribe to terminal updates
     val version by terminal.version.collectAsState()
 
-    // Measure cell size using text measurer
+    // Measure cell size for calculating rows/cols
     val textMeasurer = rememberTextMeasurer()
     val cellSize = remember(textMeasurer) {
         val result = textMeasurer.measure(
@@ -75,6 +74,33 @@ fun TerminalView(
         }
     }
 
+    // AWT KeyEventDispatcher for capturing KEY_TYPED events (regular character input)
+    // KEY_PRESSED doesn't have keyChar for regular characters in AWT
+    DisposableEffect(terminal, isFocused) {
+        val dispatcher = KeyEventDispatcher { awtEvent ->
+            if (!isFocused) return@KeyEventDispatcher false
+
+            when (awtEvent.id) {
+                java.awt.event.KeyEvent.KEY_TYPED -> {
+                    val ch = awtEvent.keyChar
+                    // Skip control characters (handled by onPreviewKeyEvent)
+                    // and CHAR_UNDEFINED
+                    if (ch != java.awt.event.KeyEvent.CHAR_UNDEFINED && ch.code >= 0x20) {
+                        val input = if (awtEvent.isAltDown) "\u001B${ch}" else ch.toString()
+                        terminal.write(input)
+                        awtEvent.consume()
+                        true
+                    } else false
+                }
+                else -> false
+            }
+        }
+        KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(dispatcher)
+        onDispose {
+            KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(dispatcher)
+        }
+    }
+
     // Cursor blink
     var cursorBlink by remember { mutableStateOf(true) }
     LaunchedEffect(isFocused) {
@@ -91,7 +117,7 @@ fun TerminalView(
     // Get terminal snapshot for rendering
     val snapshot = remember(version) { terminal.getSnapshot() }
 
-    Box(
+    Column(
         modifier = modifier
             .background(CmuxColors.terminalBg)
             .onSizeChanged { containerSize = it }
@@ -102,17 +128,27 @@ fun TerminalView(
             }
             .focusable()
             .onPreviewKeyEvent { event ->
+                // Handle special keys and control sequences via Compose key events
                 if (event.type == KeyEventType.KeyDown) {
-                    val input = keyEventToTerminalInput(event)
+                    val input = keyEventToSpecialInput(event)
                     if (input != null) {
                         terminal.write(input)
                         true
                     } else false
                 } else false
             }
+            .padding(horizontal = 4.dp, vertical = 2.dp)
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawTerminal(snapshot, cellSize, textMeasurer, cursorBlink && isFocused)
+        for (row in 0 until snapshot.rows) {
+            if (row >= snapshot.lines.size) break
+            val line = snapshot.lines[row]
+            val showCursor = snapshot.cursorVisible && snapshot.cursorRow == row && (cursorBlink || !isFocused)
+
+            TerminalRow(
+                cells = line,
+                cursorCol = if (showCursor) snapshot.cursorCol else -1,
+                isFocused = isFocused
+            )
         }
     }
 
@@ -122,100 +158,62 @@ fun TerminalView(
     }
 }
 
-private fun DrawScope.drawTerminal(
-    snapshot: TerminalSnapshot,
-    cellSize: IntSize,
-    textMeasurer: TextMeasurer,
-    showCursor: Boolean
+/**
+ * Single terminal row rendered as an AnnotatedString.
+ */
+@Composable
+private fun TerminalRow(
+    cells: List<Cell>,
+    cursorCol: Int,
+    isFocused: Boolean
 ) {
-    val cw = cellSize.width.toFloat()
-    val ch = cellSize.height.toFloat()
+    val annotatedString = remember(cells, cursorCol, isFocused) {
+        buildAnnotatedString {
+            for ((col, cell) in cells.withIndex()) {
+                val attrs = cell.attrs
+                val (fg, bg) = resolveColors(attrs)
+                val isCursor = col == cursorCol
 
-    // Draw cells
-    for (row in 0 until snapshot.rows) {
-        if (row >= snapshot.lines.size) break
-        val line = snapshot.lines[row]
-        val y = row * ch
+                val effectiveFg = when {
+                    isCursor -> CmuxColors.terminalBg
+                    attrs.dim -> fg.copy(alpha = 0.5f)
+                    else -> fg
+                }
+                val effectiveBg = when {
+                    isCursor -> CmuxColors.primary.copy(alpha = 0.85f)
+                    bg != Color.Transparent -> bg
+                    else -> Color.Unspecified
+                }
 
-        for (col in line.indices) {
-            val cell = line[col]
-            val x = col * cw
-            val attrs = cell.attrs
-            val (fg, bg) = resolveColors(attrs)
-
-            // Draw background if not transparent
-            if (bg != Color.Transparent && bg != CmuxColors.terminalBg) {
-                drawRect(
-                    color = bg,
-                    topLeft = Offset(x, y),
-                    size = Size(cw, ch)
-                )
-            }
-
-            // Draw character
-            if (cell.char != ' ' && cell.char != '\u0000') {
-                val style = TextStyle(
-                    color = if (attrs.dim) fg.copy(alpha = 0.5f) else fg,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = CmuxTypography.terminalFontSize,
-                    fontWeight = if (attrs.bold) FontWeight.Bold else FontWeight.Normal,
-                    fontStyle = if (attrs.italic) FontStyle.Italic else FontStyle.Normal,
-                )
-                val textResult = textMeasurer.measure(
-                    text = AnnotatedString(cell.char.toString()),
-                    style = style
-                )
-                drawText(textResult, topLeft = Offset(x, y))
-            }
-
-            // Draw underline
-            if (attrs.underline) {
-                drawLine(
-                    color = fg,
-                    start = Offset(x, y + ch - 2),
-                    end = Offset(x + cw, y + ch - 2),
-                    strokeWidth = 1f
-                )
-            }
-
-            // Draw strikethrough
-            if (attrs.strikethrough) {
-                drawLine(
-                    color = fg,
-                    start = Offset(x, y + ch / 2),
-                    end = Offset(x + cw, y + ch / 2),
-                    strokeWidth = 1f
-                )
-            }
-        }
-    }
-
-    // Draw cursor
-    if (snapshot.cursorVisible && showCursor) {
-        val cx = snapshot.cursorCol * cw
-        val cy = snapshot.cursorRow * ch
-        drawRect(
-            color = CmuxColors.primary.copy(alpha = 0.8f),
-            topLeft = Offset(cx, cy),
-            size = Size(cw, ch)
-        )
-        // Redraw character under cursor with inverted color
-        if (snapshot.cursorRow < snapshot.lines.size && snapshot.cursorCol < snapshot.lines[snapshot.cursorRow].size) {
-            val cell = snapshot.lines[snapshot.cursorRow][snapshot.cursorCol]
-            if (cell.char != ' ' && cell.char != '\u0000') {
-                val textResult = textMeasurer.measure(
-                    text = AnnotatedString(cell.char.toString()),
-                    style = TextStyle(
-                        color = CmuxColors.terminalBg,
+                withStyle(
+                    SpanStyle(
+                        color = effectiveFg,
+                        background = effectiveBg,
                         fontFamily = FontFamily.Monospace,
                         fontSize = CmuxTypography.terminalFontSize,
-                        fontWeight = if (cell.attrs.bold) FontWeight.Bold else FontWeight.Normal,
+                        fontWeight = if (attrs.bold) FontWeight.Bold else FontWeight.Normal,
+                        fontStyle = if (attrs.italic) FontStyle.Italic else FontStyle.Normal,
+                        textDecoration = when {
+                            attrs.underline && attrs.strikethrough ->
+                                TextDecoration.combine(listOf(TextDecoration.Underline, TextDecoration.LineThrough))
+                            attrs.underline -> TextDecoration.Underline
+                            attrs.strikethrough -> TextDecoration.LineThrough
+                            else -> TextDecoration.None
+                        }
                     )
-                )
-                drawText(textResult, topLeft = Offset(cx, cy))
+                ) {
+                    val ch = cell.char
+                    append(if (ch == '\u0000') ' ' else ch)
+                }
             }
         }
     }
+
+    BasicText(
+        text = annotatedString,
+        maxLines = 1,
+        softWrap = false,
+    )
 }
 
 private fun resolveColors(attrs: CellAttributes): Pair<Color, Color> {
@@ -233,17 +231,17 @@ private fun resolveColors(attrs: CellAttributes): Pair<Color, Color> {
 }
 
 /**
- * Convert Compose key events to terminal escape sequences.
+ * Handle only special keys and control sequences.
+ * Regular character input is handled by the AWT KeyEventDispatcher (KEY_TYPED).
  */
-private fun keyEventToTerminalInput(event: KeyEvent): String? {
+private fun keyEventToSpecialInput(event: KeyEvent): String? {
     val ctrl = event.isCtrlPressed
     val alt = event.isAltPressed
     val shift = event.isShiftPressed
 
-    // Control key combinations
+    // Control key combinations (Ctrl+A through Ctrl+Z)
     if (ctrl && !alt) {
-        val key = event.key
-        return when (key) {
+        return when (event.key) {
             Key.A -> "\u0001"
             Key.B -> "\u0002"
             Key.C -> "\u0003"
@@ -274,7 +272,7 @@ private fun keyEventToTerminalInput(event: KeyEvent): String? {
         }
     }
 
-    // Special keys
+    // Special keys only (Enter, Backspace, arrows, function keys, etc.)
     return when (event.key) {
         Key.Enter -> "\r"
         Key.Backspace -> "\u007F"
@@ -302,27 +300,6 @@ private fun keyEventToTerminalInput(event: KeyEvent): String? {
         Key.F10 -> "\u001B[21~"
         Key.F11 -> "\u001B[23~"
         Key.F12 -> "\u001B[24~"
-        else -> {
-            // Regular character input
-            val char = event.utf16CodePoint
-            if (char > 0) {
-                val ch = char.toChar()
-                if (alt) "\u001B${ch}" else ch.toString()
-            } else null
-        }
+        else -> null  // Regular chars handled by AWT KEY_TYPED dispatcher
     }
 }
-
-// Extension to get UTF-16 code point from key event
-private val KeyEvent.utf16CodePoint: Int
-    get() {
-        return try {
-            val nativeEvent = this.nativeKeyEvent
-            // For AWT-based Compose, nativeKeyEvent is java.awt.event.KeyEvent
-            if (nativeEvent is java.awt.event.KeyEvent) {
-                nativeEvent.keyChar.code
-            } else 0
-        } catch (e: Exception) {
-            0
-        }
-    }
